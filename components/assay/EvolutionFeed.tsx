@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useRunStore } from "@/store/useRunStore";
+import { useProposerStore } from "@/store/useProposerStore";
 import { formatCycleLabel, formatScore } from "@/lib/format";
 import type { Cycle } from "@/lib/types";
 import { CandidateRow } from "./CandidateRow";
@@ -10,6 +11,7 @@ import { CandidateRow } from "./CandidateRow";
 function CycleBlock({ cycle }: { cycle: Cycle }) {
   const bestId = cycle.bestSoFar?.candidate.id ?? null;
   const validCount = cycle.evaluated.filter((e) => e.score.valid).length;
+  const note = useProposerStore((s) => s.notes[cycle.index]);
 
   return (
     <div className="animate-cycle-in">
@@ -33,6 +35,19 @@ function CycleBlock({ cycle }: { cycle: Cycle }) {
           <span className="font-mono text-[11px] text-destructive/70">all invalid</span>
         )}
       </div>
+      {note && (
+        <p
+          className={`px-2.5 pb-1 font-mono text-[10px] ${
+            note.source === "random"
+              ? "text-amber-600"
+              : note.toppedUp > 0
+                ? "text-amber-600"
+                : "text-muted-foreground/70"
+          }`}
+        >
+          {note.message ?? `groq ×${note.groqCount} · explorers ×${note.explorerCount}`}
+        </p>
+      )}
       <div className="space-y-px">
         {cycle.evaluated.map((ev) => (
           <CandidateRow

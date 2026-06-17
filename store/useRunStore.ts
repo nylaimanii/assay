@@ -4,13 +4,26 @@ import {
   DEFAULT_EVALUATOR_ID,
   getEvaluator,
 } from "@/lib/evaluator";
+import type { Proposer } from "@/lib/proposer";
 import { StubProposer } from "@/lib/proposer";
+import { GroqProposer } from "@/lib/proposer-groq";
 import {
   createRun,
   hasCyclesRemaining,
   runCycle,
   runLoop,
 } from "@/lib/engine";
+
+/**
+ * Choose the proposer for a run. The construction site — not engine.ts — decides
+ * which Proposer drops into the unchanged runCycle loop: the symbolic-regression
+ * evaluator pairs with the Groq proposer; everything else uses the stub.
+ */
+function makeProposer(evaluatorId: string): Proposer {
+  return evaluatorId === "symbolic-regression"
+    ? new GroqProposer()
+    : new StubProposer();
+}
 
 /** Default seed parameters per the spec. */
 const DEFAULT_POPULATION = 8;
@@ -64,7 +77,7 @@ export const useRunStore = create<RunState>((set, get) => {
     if (!startRun) return;
 
     const myToken = ++activeToken;
-    const proposer = new StubProposer();
+    const proposer = makeProposer(startRun.config.evaluatorId);
     const evaluator = getEvaluator(startRun.config.evaluatorId);
 
     set({ isRunning: true, run: { ...startRun, status: "running" } });
@@ -137,7 +150,7 @@ export const useRunStore = create<RunState>((set, get) => {
 
       set({ isRunning: true, run: { ...run, status: "running" } });
 
-      const proposer = new StubProposer();
+      const proposer = makeProposer(run.config.evaluatorId);
       const evaluator = getEvaluator(run.config.evaluatorId);
       const updated = await runCycle(run, proposer, evaluator);
 

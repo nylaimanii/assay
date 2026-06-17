@@ -26,6 +26,9 @@ render honestly as `— invalid` (`value: null`, `valid: false`), never as `0`.
 | `lib/datasets.ts` | Seeded ground-truth datasets (quadratic / sine / inverse-square). `hiddenLaw` is UI-only, never given to evaluator/proposer. |
 | `lib/expr.ts` | Display-only expression compiler for the overlay curve. Never scores. |
 | `lib/proposer.ts` | `Proposer` interface + `StubProposer` (seed → mutate best + explore). No LLM. |
+| `lib/proposer-groq.ts` | Real `GroqProposer`. Reads scored history, proposes via the server route, always blends in grammar-random explorers. Never scores. |
+| `app/api/propose/route.ts` | Server-only Groq call (`GROQ_API_KEY` stays server-side). Strict JSON, parsed defensively; failures shrink the batch, never fabricate. |
+| `store/useProposerStore.ts` | Per-cycle proposer provenance notes (Groq vs explorer counts, top-ups, outages). |
 | `lib/engine.ts` | The closed loop: `runCycle`, `runLoop`, best-ever tracking. Pure-ish. |
 | `store/useRunStore.ts` | Zustand store driving the loop, committing each cycle live. |
 | `store/useSymbolicStore.ts` | Dataset selection + Python runtime warm-up status (separate from the core store). |
@@ -42,10 +45,25 @@ predictions, shape mismatches, and timeouts all return `valid: false` with a
 real reason — never a faked `0`. The hidden law is shown in the UI but is never
 passed to the evaluator or proposer.
 
-> Note: with the **stub** proposer (hex-style mutation), only cycle-0 random
-> expressions are valid; later mutations read as `invalid`. Meaningful climbing
-> arrives with the Groq-backed proposer (next). The evaluator, scoring, datasets,
-> and viz are all real now.
+## Proposer: Groq
+
+Selecting the symbolic-regression evaluator pairs it with the **Groq proposer**
+(`llama-3.3-70b-versatile`). Each cycle it sends the objective, the noisy-data
+metadata, and a compact history (top-scoring genomes + a few invalids with their
+real error reasons) to a server route, which asks the model for a strict-JSON
+batch of new expressions. The model never sees the hidden law — only how prior
+candidates scored and why some failed. The proposer always blends in a couple of
+grammar-random explorers (deliberate anti-collapse, not a fallback), and any
+shortfall or outage is topped up with explorers and surfaced honestly in the feed.
+The evaluator remains the only thing that assigns a score.
+
+```bash
+# .env.local  (server-side only; never shipped to the browser)
+GROQ_API_KEY=gsk_your_key_here
+```
+
+Without a key the loop still runs on the real evaluator — every cycle just shows
+"groq unavailable — exploring randomly" and proposes grammar-random expressions.
 
 ### Swap points
 
