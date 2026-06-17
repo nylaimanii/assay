@@ -1,4 +1,5 @@
 import type {
+  DatasetMeta,
   HistoryEntry,
   HistoryInvalid,
   ProposeRequest,
@@ -9,8 +10,11 @@ import type {
  * ASSAY — server-side Groq proposer call. Runs in Node; GROQ_API_KEY never
  * reaches the browser. Takes scored history (never the hidden law) and returns
  * a strict-JSON batch of candidate expressions. On any failure it returns an
- * empty batch with a reason so the client proposer can top up with explorers —
- * it NEVER fabricates candidates and NEVER touches scores.
+ * empty batch with a REAL reason so the client proposer can top up with
+ * explorers — it NEVER fabricates candidates and NEVER touches scores.
+ *
+ * Every field of the incoming body is normalized before use: a missing or
+ * misshapen datasetMeta / history must not throw (that was the `.name` crash).
  */
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -22,6 +26,76 @@ Propose NEW candidate expressions that should score higher: refine the ones that
 Allowed tokens ONLY: the variable x, numeric constants, the operators + - * / **, the functions sin cos exp log sqrt abs, and the constant pi. Nothing else — no other variables, no other functions, no assignment, no calls besides those listed.
 Prefer simple expressions: a clean low-complexity fit beats a bloated one with marginally higher R².
 Return ONLY a JSON object of the form {"candidates": ["expr1", "expr2", ...]} with no prose and no markdown fences.`;
+
+/* --- defensive normalization of the request body -------------------------- */
+
+function toFiniteNumber(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function normalizeDatasetMeta(raw: unknown): DatasetMeta {
+  const dm = (raw ?? {}) as Partial<DatasetMeta>;
+  const xr = dm.xRange;
+  const xRange: [number, number] =
+    Array.isArray(xr) && xr.length === 2
+      ? [toFiniteNumber(xr[0]), toFiniteNumber(xr[1])]
+      : [0, 1];
+  return {
+    name: typeof dm.name === "string" && dm.name.length > 0 ? dm.name : "unknown dataset",
+    xRange,
+    n: toFiniteNumber(dm.n),
+    noiseSigma: toFiniteNumber(dm.noiseSigma),
+  };
+}
+
+function normalizeTop(raw: unknown): HistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((h): h is Record<string, unknown> => !!h && typeof h === "object")
+    .map((h) => ({
+      genome: typeof h.genome === "string" ? h.genome : "",
+      score: toFiniteNumber(h.score),
+      r2: toFiniteNumber(h.r2),
+      complexity: toFiniteNumber(h.complexity),
+    }))
+    .filter((h) => h.genome.length > 0)
+    .slice(0, 8);
+}
+
+function normalizeInvalid(raw: unknown): HistoryInvalid[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((h): h is Record<string, unknown> => !!h && typeof h === "object")
+    .map((h) => ({
+      genome: typeof h.genome === "string" ? h.genome : "",
+      error: typeof h.error === "string" ? h.error : "invalid",
+    }))
+    .filter((h) => h.genome.length > 0)
+    .slice(0, 4);
+}
+
+function normalizeBody(raw: unknown): ProposeRequest {
+  const body = (raw ?? {}) as Partial<ProposeRequest>;
+  const populationSize = Math.max(1, Math.min(64, Math.floor(toFiniteNumber(body.populationSize, 8))));
+  const requestCount = Math.max(
+    1,
+    Math.min(64, Math.floor(toFiniteNumber(body.requestCount, populationSize))),
+  );
+  return {
+    objective:
+      typeof body.objective === "string" && body.objective.length > 0
+        ? body.objective
+        : "Fit an expression in x to the noisy data.",
+    datasetMeta: normalizeDatasetMeta(body.datasetMeta),
+    populationSize,
+    cycle: Math.max(0, Math.floor(toFiniteNumber(body.cycle))),
+    requestCount,
+    history: {
+      top: normalizeTop(body.history?.top),
+      invalid: normalizeInvalid(body.history?.invalid),
+    },
+  };
+}
 
 function buildUserPrompt(body: ProposeRequest): string {
   const { objective, datasetMeta, requestCount, cycle, history } = body;
@@ -103,23 +177,14 @@ export async function POST(request: Request): Promise<Response> {
     return json({ candidates: [], error: "GROQ_API_KEY not set" });
   }
 
-  let body: ProposeRequest;
+  let raw: unknown;
   try {
-    body = (await request.json()) as ProposeRequest;
+    raw = await request.json();
   } catch {
-    return json({ candidates: [], error: "bad request body" }, 400);
+    return json({ candidates: [], error: "bad request body: not JSON" }, 400);
   }
 
-  const requestCount = Math.max(1, Math.min(64, Math.floor(body.requestCount || 0)));
-  // Defensive clamps on the history we forward.
-  const safeBody: ProposeRequest = {
-    ...body,
-    requestCount,
-    history: {
-      top: (body.history?.top ?? []).slice(0, 8) as HistoryEntry[],
-      invalid: (body.history?.invalid ?? []).slice(0, 4) as HistoryInvalid[],
-    },
-  };
+  const body = normalizeBody(raw);
 
   try {
     const res = await fetch(GROQ_URL, {
@@ -135,30 +200,46 @@ export async function POST(request: Request): Promise<Response> {
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: buildUserPrompt(safeBody) },
+          { role: "user", content: buildUserPrompt(body) },
         ],
       }),
     });
 
+    // Non-2xx: surface the actual status + Groq's message; never throw.
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
+      console.error("[propose] groq http error", res.status, detail.slice(0, 500));
       return json({
         candidates: [],
-        error: `groq http ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ""}`,
+        error: `groq http ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`,
       });
     }
 
-    const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const content = data.choices?.[0]?.message?.content ?? "";
-    const candidates = extractCandidates(content).slice(0, requestCount);
+    // Parse the success body defensively — it may not be JSON, or may carry an error.
+    const data = (await res.json().catch(() => null)) as {
+      error?: { message?: string };
+      choices?: { message?: { content?: string | null } }[];
+    } | null;
+
+    if (data?.error?.message) {
+      console.error("[propose] groq returned error field", data.error.message);
+      return json({ candidates: [], error: `groq error: ${data.error.message}` });
+    }
+
+    const content = data?.choices?.[0]?.message?.content ?? "";
+    const candidates = extractCandidates(content).slice(0, body.requestCount);
 
     if (candidates.length === 0) {
-      return json({ candidates: [], error: "model returned no usable candidates" });
+      console.error("[propose] no usable candidates; raw content:", content.slice(0, 300));
+      return json({
+        candidates: [],
+        error: "groq returned no usable candidates (empty or unparseable content)",
+      });
     }
     return json({ candidates });
   } catch (err) {
-    return json({ candidates: [], error: `groq request failed: ${String(err)}` });
+    const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error("[propose] request threw", reason);
+    return json({ candidates: [], error: `groq request failed: ${reason}` });
   }
 }
