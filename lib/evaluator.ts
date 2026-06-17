@@ -1,4 +1,5 @@
 import type { Score } from "./types";
+import { SymbolicRegressionEvaluator } from "./evaluator-symbolic";
 
 /**
  * ASSAY — the EVALUATOR interface. This is the spine of the whole project.
@@ -127,8 +128,11 @@ class StubQuadraticEvaluator implements Evaluator {
   }
 }
 
-/** The registry of available evaluators. Only the stub exists for now. */
-export const EVALUATORS: readonly Evaluator[] = [new StubQuadraticEvaluator()];
+/** The registry of available evaluators. */
+export const EVALUATORS: readonly Evaluator[] = [
+  new StubQuadraticEvaluator(),
+  new SymbolicRegressionEvaluator(),
+];
 
 export const DEFAULT_EVALUATOR_ID = "stub-quadratic";
 

@@ -1,9 +1,15 @@
 "use client";
 
+import { useMemo } from "react";
 import { useRunStore } from "@/store/useRunStore";
+import { useSymbolicStore } from "@/store/useSymbolicStore";
+import { getDataset } from "@/lib/datasets";
 import { formatScore, formatValue, truncateGenome } from "@/lib/format";
 import { Separator } from "@/components/ui/separator";
 import { FitnessCurve } from "./FitnessCurve";
+import { DataScatter } from "./DataScatter";
+
+const SYMBOLIC_ID = "symbolic-regression";
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -19,10 +25,20 @@ function Stat({ label, value }: { label: string; value: string }) {
 export function Readout() {
   const run = useRunStore((s) => s.run);
   const configuredMaxCycles = useRunStore((s) => s.maxCycles);
+  const selectedEvaluatorId = useRunStore((s) => s.selectedEvaluatorId);
+  const datasetId = useSymbolicStore((s) => s.datasetId);
+
+  const isSymbolic = selectedEvaluatorId === SYMBOLIC_ID;
+  const dataset = isSymbolic ? getDataset(datasetId) : null;
+  const points = useMemo(
+    () => (dataset ? dataset.generate() : null),
+    [dataset],
+  );
 
   const maxCycles = run?.config.maxCycles ?? configuredMaxCycles;
   const completed = run?.cycles.length ?? 0;
   const best = run?.bestEver ?? null;
+  const bestGenome = best?.candidate.genome ?? null;
 
   // Running best-ever fitness per completed cycle — the climbing curve.
   const data: number[] = [];
@@ -59,16 +75,43 @@ export function Readout() {
         >
           {best ? formatScore(best.score) : "—"}
         </div>
-        <div className="mt-1 h-4 font-mono text-[11px] text-muted-foreground">
+        <div className="mt-1 h-4 truncate font-mono text-[11px] text-muted-foreground">
           {best ? (
             <span title={best.candidate.genome}>
-              {truncateGenome(best.candidate.genome)} · cycle {best.candidate.cycle}
+              {truncateGenome(best.candidate.genome, 28)} · cycle {best.candidate.cycle}
             </span>
           ) : (
             <span>awaiting first valid candidate</span>
           )}
         </div>
       </section>
+
+      {/* symbolic regression: hidden target + data/fit scatter */}
+      {isSymbolic && dataset && points && (
+        <>
+          <Separator />
+          <section className="space-y-2">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Target
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                hidden from the engine
+              </span>
+            </div>
+            <div className="tnum rounded-md border border-dashed border-[#cfe3f6] bg-signal-tint px-3 py-1.5 text-center font-mono text-sm font-medium text-[#2f6fb0]">
+              {dataset.hiddenLaw}
+            </div>
+            <div className="rounded-md border border-border bg-card p-2">
+              <DataScatter points={points} xRange={dataset.xRange} genome={bestGenome} />
+            </div>
+            <p className="font-mono text-[10px] text-muted-foreground/70">
+              <span className="text-slate-400">●</span> noisy data ·{" "}
+              <span className="text-[#4f95d6]">—</span> best-ever fit
+            </p>
+          </section>
+        </>
+      )}
 
       <Separator />
 
