@@ -46,7 +46,7 @@ function candidateId(cycle: number, index: number): string {
 
 /** Coarse token set of an expression, for best-effort parent attribution. */
 function tokenize(expr: string): Set<string> {
-  const matches = expr.toLowerCase().match(/sin|cos|exp|log|sqrt|abs|pi|x|\d+\.?\d*|\*\*|[-+*/()]/g);
+  const matches = expr.toLowerCase().match(/sin|cos|exp|log|sqrt|abs|pi|c\d+|x|\d+\.?\d*|\*\*|[-+*/()]/g);
   return new Set(matches ?? []);
 }
 
@@ -79,6 +79,7 @@ function summarize(run: Run): {
           score: score.value,
           r2: score.detail.r2 ?? 0,
           complexity: score.detail.complexity ?? 0,
+          fittedExpr: score.fittedExpr,
           candidateId: candidate.id,
         };
         const prev = bestByGenome.get(candidate.genome);
@@ -142,7 +143,13 @@ export class GroqProposer implements Proposer {
       cycle,
       requestCount,
       history: {
-        top: top.map(({ genome, score, r2, complexity }) => ({ genome, score, r2, complexity })),
+        top: top.map(({ genome, score, r2, complexity, fittedExpr }) => ({
+          genome,
+          score,
+          r2,
+          complexity,
+          fittedExpr,
+        })),
         invalid,
       },
     });

@@ -38,7 +38,9 @@ export function Readout() {
   const maxCycles = run?.config.maxCycles ?? configuredMaxCycles;
   const completed = run?.cycles.length ?? 0;
   const best = run?.bestEver ?? null;
-  const bestGenome = best?.candidate.genome ?? null;
+  // Prefer the fitted expression (real numeric constants) for display + overlay;
+  // the structural genome (with C0, C1, …) doesn't plot on its own.
+  const bestExpr = best?.score.fittedExpr ?? best?.candidate.genome ?? null;
 
   // Running best-ever fitness per completed cycle — the climbing curve.
   const data: number[] = [];
@@ -77,8 +79,8 @@ export function Readout() {
         </div>
         <div className="mt-1 h-4 truncate font-mono text-[11px] text-muted-foreground">
           {best ? (
-            <span title={best.candidate.genome}>
-              {truncateGenome(best.candidate.genome, 28)} · cycle {best.candidate.cycle}
+            <span title={bestExpr ?? best.candidate.genome}>
+              {truncateGenome(bestExpr ?? best.candidate.genome, 28)} · cycle {best.candidate.cycle}
             </span>
           ) : (
             <span>awaiting first valid candidate</span>
@@ -103,7 +105,7 @@ export function Readout() {
               {dataset.hiddenLaw}
             </div>
             <div className="rounded-md border border-border bg-card p-2">
-              <DataScatter points={points} xRange={dataset.xRange} genome={bestGenome} />
+              <DataScatter points={points} xRange={dataset.xRange} genome={bestExpr} />
             </div>
             <p className="font-mono text-[10px] text-muted-foreground/70">
               <span className="text-slate-400">●</span> noisy data ·{" "}

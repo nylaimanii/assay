@@ -125,32 +125,26 @@ function invalid(error: string): Score {
 
 /* --- expression grammar for random proposals ------------------------------ */
 
-const FUNCS = ["sin", "cos", "exp", "log", "sqrt", "abs"] as const;
+/**
+ * Explorers propose STRUCTURE with named free parameters (C0, C1, …), never
+ * baked-in numbers — the evaluator fits the constants by least-squares. Each
+ * form is a linear combination of basis functions of x, so it is linear in its
+ * parameters and fittable in one shot (matching this pass's scope).
+ */
+const BASES = ["1", "x", "x**2", "x**3", "1/x", "1/x**2", "sin(x)", "cos(x)", "exp(x)", "sqrt(x)"];
 
-function randomConstant(): string {
-  const v = Math.round((Math.random() * 10 - 5) * 10) / 10; // [-5, 5], 1 decimal
-  return v.toString();
-}
-
-function randomSubexpr(depth: number): string {
-  if (depth <= 0 || Math.random() < 0.3) {
-    return Math.random() < 0.6 ? "x" : randomConstant();
+function randomParamForm(): string {
+  const pool = [...BASES];
+  // Fisher–Yates partial shuffle to pick 1–3 distinct basis terms.
+  const k = 1 + Math.floor(Math.random() * 3);
+  const chosen: string[] = [];
+  for (let i = 0; i < k && pool.length > 0; i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    chosen.push(pool.splice(idx, 1)[0]);
   }
-  const r = Math.random();
-  if (r < 0.35) {
-    const op = ["+", "-", "*", "/"][Math.floor(Math.random() * 4)];
-    return `(${randomSubexpr(depth - 1)} ${op} ${randomSubexpr(depth - 1)})`;
-  }
-  if (r < 0.6) {
-    const base = Math.random() < 0.7 ? "x" : `(${randomSubexpr(depth - 1)})`;
-    const exp = 2 + Math.floor(Math.random() * 2); // 2 or 3
-    return `${base}**${exp}`;
-  }
-  if (r < 0.85) {
-    const f = FUNCS[Math.floor(Math.random() * FUNCS.length)];
-    return `${f}(${randomSubexpr(depth - 1)})`;
-  }
-  return Math.random() < 0.6 ? "x" : randomConstant();
+  return chosen
+    .map((basis, i) => (basis === "1" ? `C${i}` : `C${i}*${basis}`))
+    .join(" + ");
 }
 
 /* --- the Evaluator ------------------------------------------------------- */
@@ -165,7 +159,7 @@ export class SymbolicRegressionEvaluator implements Evaluator {
   private chain: Promise<unknown> = Promise.resolve();
 
   randomGenome(): string {
-    return randomSubexpr(3);
+    return randomParamForm();
   }
 
   evaluate(genome: string): Promise<Score> {
@@ -211,7 +205,9 @@ export class SymbolicRegressionEvaluator implements Evaluator {
         r2: payload.r2,
         rmse: payload.rmse,
         complexity: payload.complexity,
+        ...(payload.params ?? {}), // fitted constants, e.g. { C0: 5.98 }
       },
+      fittedExpr: payload.fittedExpr,
     };
   }
 }

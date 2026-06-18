@@ -21,6 +21,8 @@ export interface HistoryEntry {
   score: number;
   r2: number;
   complexity: number;
+  /** The structural form with fitted constants substituted, e.g. "5.98 / x ** 2". */
+  fittedExpr?: string;
 }
 
 /** A prior candidate that failed, with the evaluator's real reason. */

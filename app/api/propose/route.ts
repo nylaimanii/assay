@@ -106,12 +106,13 @@ async function callGroqWithRetry(payloadBody: string, apiKey: string): Promise<G
   return { ok: false, throttled, error: "groq retries exhausted" };
 }
 
-const SYSTEM_PROMPT = `You are a symbolic-regression search engine. You propose math expressions in x that fit noisy data.
-You are given how previous candidates scored (score = R² minus a small complexity penalty) and which ones failed and why.
-Propose NEW candidate expressions that should score higher: refine the ones that scored well, vary their structure, and avoid the failure modes you are shown.
-Allowed tokens ONLY: the variable x, numeric constants, the operators + - * / **, the functions sin cos exp log sqrt abs, and the constant pi. Nothing else — no other variables, no other functions, no assignment, no calls besides those listed.
-Prefer simple expressions: a clean low-complexity fit beats a bloated one with marginally higher R².
-Return ONLY a JSON object of the form {"candidates": ["expr1", "expr2", ...]} with no prose and no markdown fences.`;
+const SYSTEM_PROMPT = `You are a symbolic-regression search engine. You propose the STRUCTURE of math expressions in x that fit noisy data. A deterministic least-squares fitter assigns the numeric constants for you — your job is the FORM, not the numbers.
+Use named free parameters C0, C1, C2, … for EVERY constant that should be fit. Examples: "C0 / x**2", "C0*x**2 + C1", "C0*x + C1", "C0*sin(x) + C1". Do NOT write numeric coefficients like 2.5 or 6 — write a Cn parameter and let the system fit it.
+You are given how previous candidates scored (score = R² minus a small complexity penalty), the FITTED form of each (constants filled in by the fitter), and which candidates failed and why. Refine the structures that scored well, vary the form, and avoid the failure modes you are shown.
+SCOPE: each Cn must appear LINEARLY — a parameter may multiply a function of x (C0*sin(x)) but must NOT appear inside a function or multiply another parameter. Forms like "C0*sin(C1*x)" are rejected as unsupported this pass; prefer linear-in-parameter forms.
+Allowed tokens ONLY: the variable x, parameters C0..C9, the operators + - * / **, the functions sin cos exp log sqrt abs, and the constant pi. Nothing else.
+Prefer simple forms: a clean low-complexity fit beats a bloated one with marginally higher R².
+Return ONLY a JSON object of the form {"candidates": ["form1", "form2", ...]} with no prose and no markdown fences.`;
 
 /* --- defensive normalization of the request body -------------------------- */
 
@@ -143,6 +144,7 @@ function normalizeTop(raw: unknown): HistoryEntry[] {
       score: toFiniteNumber(h.score),
       r2: toFiniteNumber(h.r2),
       complexity: toFiniteNumber(h.complexity),
+      fittedExpr: typeof h.fittedExpr === "string" ? h.fittedExpr : undefined,
     }))
     .filter((h) => h.genome.length > 0)
     .slice(0, 6); // top-k cap — keeps each call small to stay under the TPM window
@@ -194,10 +196,11 @@ function buildUserPrompt(body: ProposeRequest): string {
 
   if (history.top.length > 0) {
     lines.push("");
-    lines.push("Best candidates so far (higher score is better):");
+    lines.push("Best forms so far (higher score is better; fitted = constants the fitter assigned):");
     for (const h of history.top) {
+      const fitted = h.fittedExpr && h.fittedExpr !== h.genome ? `  [fitted: ${h.fittedExpr}]` : "";
       lines.push(
-        `  ${h.genome}  → score ${h.score.toFixed(3)}, R² ${h.r2.toFixed(3)}, complexity ${h.complexity}`,
+        `  ${h.genome}${fitted}  → score ${h.score.toFixed(3)}, R² ${h.r2.toFixed(3)}, complexity ${h.complexity}`,
       );
     }
   } else {

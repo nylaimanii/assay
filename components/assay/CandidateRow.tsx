@@ -13,6 +13,13 @@ export function CandidateRow({
 }) {
   const { candidate, score } = evaluation;
   const invalid = !score.valid || score.value === null;
+  // Show the rediscovered (fitted) expression when the evaluator fit constants;
+  // fall back to the structural genome otherwise. Title shows both.
+  const display = score.fittedExpr ?? candidate.genome;
+  const title =
+    score.fittedExpr && score.fittedExpr !== candidate.genome
+      ? `${candidate.genome}  →  ${score.fittedExpr}`
+      : candidate.genome;
 
   return (
     <div
@@ -29,9 +36,9 @@ export function CandidateRow({
       <ProvenanceBadge kind={candidate.generatedBy} />
       <span
         className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500"
-        title={candidate.genome}
+        title={title}
       >
-        {truncateGenome(candidate.genome)}
+        {truncateGenome(display)}
       </span>
       {invalid ? (
         <span className="tnum shrink-0 font-mono text-[11px] font-medium text-destructive/80">

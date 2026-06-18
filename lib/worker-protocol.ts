@@ -13,6 +13,10 @@ export type EvalPayload =
       r2: number;
       rmse: number;
       complexity: number;
+      /** The expression with fitted constants substituted in, e.g. "5.98 / x ** 2". */
+      fittedExpr?: string;
+      /** Fitted free-parameter values, e.g. { C0: 5.98 }. */
+      params?: Record<string, number>;
     }
   | { valid: false; error: string };
 

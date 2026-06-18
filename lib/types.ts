@@ -38,6 +38,13 @@ export interface Score {
   valid: boolean;
   detail: Record<string, number>;
   error?: string;
+  /**
+   * Optional, back-compatible: the candidate expression with its free constants
+   * fitted in (e.g. "5.98 / x ** 2"). Present when the evaluator fit parameters;
+   * the proposer and UI read it to show the rediscovered law, but it is never a
+   * source of score — only the evaluator's `value` is.
+   */
+  fittedExpr?: string;
 }
 
 /** A candidate paired with the score the evaluator gave it. */
