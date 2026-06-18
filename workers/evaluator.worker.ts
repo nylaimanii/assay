@@ -146,6 +146,78 @@ def _finish(genome, tree, x, y, yhat, fitted_expr, params_out):
     }
     return json.dumps(result)
 
+def _fit_nonlinear(genome, tree, code, x, y, params):
+    # scipy is loaded LAZILY on first need; signal the JS side to load it, then retry.
+    try:
+        from scipy.optimize import least_squares
+    except Exception:
+        return json.dumps({'valid': False, 'error': '__NEED_SCIPY__'})
+    import time
+
+    n = len(params)
+
+    def predict(c):
+        d = {params[i]: float(c[i]) for i in range(n)}
+        with np.errstate(all='ignore'):
+            return _eval_with(code, x, d)
+
+    def resid(c):
+        yh = predict(c)
+        yh = np.where(np.isfinite(yh), yh, 1.0e6)  # penalize, don't crash
+        return yh - y
+
+    # Multi-start to beat the harmonic-lock failure mode: seed a spread of
+    # frequency-scale and amplitude-scale guesses across every parameter slot.
+    yscale = float(max(np.std(y) * 1.4142, (np.max(y) - np.min(y)) / 2.0, 1.0))
+    xspan = float(np.max(x) - np.min(x)) if x.size else 1.0
+    base_w = (2.0 * np.pi / xspan) if xspan > 1e-9 else 1.0
+    freq_seeds = [base_w * k for k in (0.5, 1.0, 2.0, 3.0, 5.0, 8.0)]
+
+    starts = []
+    for f in freq_seeds:
+        for i in range(n):
+            s = [yscale] * n
+            s[i] = f                 # try this freq guess in each parameter slot
+            starts.append(s)
+    rng = np.random.default_rng(0)   # deterministic judge
+    for _ in range(12):
+        starts.append([
+            float(rng.uniform(-1.0, 1.0)) * (yscale if rng.random() < 0.5 else 6.0)
+            for _ in range(n)
+        ])
+
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    best = None
+    t0 = time.time()
+    for s in starts:
+        if time.time() - t0 > 1.8:   # hard per-candidate budget across restarts
+            break
+        try:
+            res = least_squares(resid, s, method='lm', max_nfev=2000)
+        except Exception:
+            continue
+        c = res.x
+        yh = predict(c)
+        if not np.all(np.isfinite(yh)):
+            continue
+        cost = float(np.sum((yh - y) ** 2))
+        if best is None or cost < best[0]:
+            best = (cost, np.asarray(c, dtype=float))
+        if ss_tot > 1e-12 and (1.0 - best[0] / ss_tot) > 0.999:
+            break                    # excellent fit found — stop early
+
+    if best is None:
+        return json.dumps({'valid': False, 'error': 'nonlinear fit did not converge'})
+
+    sol = best[1]
+    yhat = predict(sol)
+    params_out = {params[i]: round(float(sol[i]), 6) for i in range(n)}
+    try:
+        fitted = _fitted_expr(genome, {params[i]: round(float(sol[i]), 4) for i in range(n)})
+    except Exception:
+        fitted = genome
+    return _finish(genome, tree, x, y, yhat, fitted, params_out)
+
 def evaluate_expr(genome, x_json, y_json):
     try:
         tree = ast.parse(genome, mode='eval')
@@ -200,20 +272,24 @@ def evaluate_expr(genome, x_json, y_json):
         return json.dumps({'valid': False, 'error': 'non-finite basis'})
 
     # Verify the model really is linear in its parameters: f(C) must equal
-    # base + A @ C for arbitrary C. If not, a parameter is inside a function or
-    # multiplies another parameter → out of scope for this (linear) pass.
+    # base + A @ C for arbitrary C. If not (a parameter is inside a function or
+    # multiplies another), route to the nonlinear scipy fitter (pass B).
     rng = np.random.default_rng(0)
+    is_linear = True
     for _ in range(3):
         test = {p: float(rng.uniform(-3.0, 3.0)) for p in params}
         try:
             actual = _eval_with(code, x, test)
         except Exception:
-            return json.dumps({'valid': False, 'error': 'nonlinear params unsupported (pass B)'})
+            is_linear = False; break
         cvec = np.array([test[p] for p in params])
         predicted = base + A @ cvec
         scale = np.maximum(np.abs(actual), 1.0)
         if not np.all(np.isfinite(actual)) or np.max(np.abs(actual - predicted) / scale) > 1e-6:
-            return json.dumps({'valid': False, 'error': 'nonlinear params unsupported (pass B)'})
+            is_linear = False; break
+
+    if not is_linear:
+        return _fit_nonlinear(genome, tree, code, x, y, params)
 
     sol, _res, rank, _sv = np.linalg.lstsq(A, y - base, rcond=None)
     if rank < A.shape[1]:
@@ -231,16 +307,24 @@ def evaluate_expr(genome, x_json, y_json):
 `;
 
 let pyodide: Pyodide | null = null;
+let scipyLoaded = false;
 const datasets = new Map<string, { x: number[]; y: number[] }>();
 
 async function ensurePyodide(): Promise<Pyodide> {
   if (pyodide) return pyodide;
   importScripts(`${PYODIDE_CDN}pyodide.js`);
   const py = await loadPyodide({ indexURL: PYODIDE_CDN });
-  await py.loadPackage("numpy");
+  await py.loadPackage("numpy"); // scipy is NOT loaded here — keeps warm-up fast
   await py.runPythonAsync(PY_SETUP);
   pyodide = py;
   return py;
+}
+
+/** Load scipy on first need (the nonlinear fit path), then cache it. */
+async function ensureScipy(py: Pyodide): Promise<void> {
+  if (scipyLoaded) return;
+  await py.loadPackage("scipy");
+  scipyLoaded = true;
 }
 
 ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
@@ -278,8 +362,14 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
       py.globals.set("genome", genome);
       py.globals.set("x_json", JSON.stringify(ds.x));
       py.globals.set("y_json", JSON.stringify(ds.y));
-      const out = await py.runPythonAsync("evaluate_expr(genome, x_json, y_json)");
-      const payload = JSON.parse(out as string) as EvalPayload;
+      let out = await py.runPythonAsync("evaluate_expr(genome, x_json, y_json)");
+      let payload = JSON.parse(out as string) as EvalPayload;
+      // Nonlinear candidate but scipy not yet loaded → load it once, then retry.
+      if (!payload.valid && payload.error === "__NEED_SCIPY__") {
+        await ensureScipy(py);
+        out = await py.runPythonAsync("evaluate_expr(genome, x_json, y_json)");
+        payload = JSON.parse(out as string) as EvalPayload;
+      }
       ctx.postMessage({ type: "result", requestId, payload });
     } catch (err) {
       ctx.postMessage({

@@ -13,7 +13,9 @@ import { useSymbolicStore } from "@/store/useSymbolicStore";
  * onto a Score. It never computes a score itself, and never sees the hidden law.
  */
 
-const EVAL_TIMEOUT_MS = 4000;
+// Generous enough that the FIRST nonlinear candidate can lazily download scipy
+// (a one-time few-second load) without being killed; linear evals finish in ~30ms.
+const EVAL_TIMEOUT_MS = 15000;
 
 /* --- worker singleton + request plumbing (browser only) ------------------- */
 
@@ -133,9 +135,22 @@ function invalid(error: string): Score {
  */
 const BASES = ["1", "x", "x**2", "x**3", "1/x", "1/x**2", "sin(x)", "cos(x)", "exp(x)", "sqrt(x)"];
 
+// Nonlinear-in-parameter forms (a Cn inside a function) — fit by scipy (pass B).
+const NONLINEAR_FORMS = [
+  "C0*sin(C1*x + C2)",
+  "C0*cos(C1*x + C2)",
+  "C0*sin(C1*x)",
+  "C0*exp(C1*x)",
+  "C0*exp(C1*x) + C2",
+];
+
 function randomParamForm(): string {
+  // Sometimes explore a nonlinear form (periodic / exponential laws)...
+  if (Math.random() < 0.35) {
+    return NONLINEAR_FORMS[Math.floor(Math.random() * NONLINEAR_FORMS.length)];
+  }
+  // ...otherwise a linear combination of basis functions (linear in its params).
   const pool = [...BASES];
-  // Fisher–Yates partial shuffle to pick 1–3 distinct basis terms.
   const k = 1 + Math.floor(Math.random() * 3);
   const chosen: string[] = [];
   for (let i = 0; i < k && pool.length > 0; i++) {

@@ -107,9 +107,9 @@ async function callGroqWithRetry(payloadBody: string, apiKey: string): Promise<G
 }
 
 const SYSTEM_PROMPT = `You are a symbolic-regression search engine. You propose the STRUCTURE of math expressions in x that fit noisy data. A deterministic least-squares fitter assigns the numeric constants for you — your job is the FORM, not the numbers.
-Use named free parameters C0, C1, C2, … for EVERY constant that should be fit. Examples: "C0 / x**2", "C0*x**2 + C1", "C0*x + C1", "C0*sin(x) + C1". Do NOT write numeric coefficients like 2.5 or 6 — write a Cn parameter and let the system fit it.
+Use named free parameters C0, C1, C2, … for EVERY constant that should be fit. Examples: "C0 / x**2", "C0*x**2 + C1", "C0*x + C1", "C0*sin(C1*x + C2)", "C0*exp(C1*x)". Do NOT write numeric coefficients like 2.5 or 6 — write a Cn parameter and let the system fit it.
+Parameters MAY appear inside functions for periodic or exponential laws — e.g. a frequency "C1" inside "C0*sin(C1*x + C2)" or a rate "C1" inside "C0*exp(C1*x)". The system fits those too. Use this for oscillating or growth/decay data.
 You are given how previous candidates scored (score = R² minus a small complexity penalty), the FITTED form of each (constants filled in by the fitter), and which candidates failed and why. Refine the structures that scored well, vary the form, and avoid the failure modes you are shown.
-SCOPE: each Cn must appear LINEARLY — a parameter may multiply a function of x (C0*sin(x)) but must NOT appear inside a function or multiply another parameter. Forms like "C0*sin(C1*x)" are rejected as unsupported this pass; prefer linear-in-parameter forms.
 Allowed tokens ONLY: the variable x, parameters C0..C9, the operators + - * / **, the functions sin cos exp log sqrt abs, and the constant pi. Nothing else.
 Prefer simple forms: a clean low-complexity fit beats a bloated one with marginally higher R².
 Return ONLY a JSON object of the form {"candidates": ["form1", "form2", ...]} with no prose and no markdown fences.`;
