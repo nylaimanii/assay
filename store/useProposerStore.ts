@@ -15,7 +15,9 @@ export interface CycleNote {
   explorerCount: number;
   /** Explorers added to cover a Groq shortfall (≠ the deliberate baseline explorers). */
   toppedUp: number;
-  /** Set only when something noteworthy happened (unavailable / partial). */
+  /** True when the propose call hit a 429 and recovered via backoff + retry. */
+  throttled?: boolean;
+  /** Set only when something noteworthy happened (unavailable / partial / throttled). */
   message?: string;
 }
 

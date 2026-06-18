@@ -38,10 +38,10 @@ function CycleBlock({ cycle }: { cycle: Cycle }) {
       {note && (
         <p
           className={`px-2.5 pb-1 font-mono text-[10px] ${
-            note.source === "random"
+            note.source === "random" || note.toppedUp > 0
               ? "text-amber-600"
-              : note.toppedUp > 0
-                ? "text-amber-600"
+              : note.throttled
+                ? "text-[#5a8bc0]"
                 : "text-muted-foreground/70"
           }`}
         >

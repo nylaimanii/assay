@@ -26,6 +26,20 @@ const TOP_K = 6;
 const INVALID_K = 3;
 const SIMILARITY_THRESHOLD = 0.5;
 
+/**
+ * Minimum gap between consecutive propose calls. One call per cycle is already
+ * the design, but back-to-back cycles can still burst several calls into Groq's
+ * 60s TPM window; spacing them out keeps tokens-per-minute under the limit.
+ * (Smaller populationSize also reduces TPM pressure — it is not forced here.)
+ */
+const MIN_PROPOSE_GAP_MS = 700;
+let lastProposeFinishedAt = 0;
+
+async function pace(): Promise<void> {
+  const wait = MIN_PROPOSE_GAP_MS - (Date.now() - lastProposeFinishedAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
 function candidateId(cycle: number, index: number): string {
   return `c-${cycle}-${String(index).padStart(2, "0")}`;
 }
@@ -114,6 +128,8 @@ export class GroqProposer implements Proposer {
     const dataset = getDataset(datasetId);
     const { top, invalid } = summarize(run);
 
+    // Space propose calls so consecutive cycles don't burst past Groq's TPM window.
+    await pace();
     const response = await callProposeRoute({
       objective: run.config.objective,
       datasetMeta: {
@@ -130,6 +146,7 @@ export class GroqProposer implements Proposer {
         invalid,
       },
     });
+    lastProposeFinishedAt = Date.now();
 
     const groqGenomes = response.candidates.slice(0, requestCount);
     const groqCount = groqGenomes.length;
@@ -189,6 +206,7 @@ export class GroqProposer implements Proposer {
       shortfall,
       requestCount,
       error: response.error,
+      throttled: response.throttled ?? false,
     });
     useProposerStore.getState().setNote(cycle, note);
 
@@ -202,8 +220,9 @@ function buildNote(args: {
   shortfall: number;
   requestCount: number;
   error?: string;
+  throttled: boolean;
 }): CycleNote {
-  const { groqCount, explorerCount, shortfall, requestCount, error } = args;
+  const { groqCount, explorerCount, shortfall, requestCount, error, throttled } = args;
 
   if (groqCount === 0) {
     return {
@@ -211,6 +230,7 @@ function buildNote(args: {
       groqCount: 0,
       explorerCount,
       toppedUp: shortfall,
+      throttled,
       message: `groq unavailable — exploring randomly${error ? ` (${error})` : ""}`,
     };
   }
@@ -220,8 +240,17 @@ function buildNote(args: {
       groqCount,
       explorerCount,
       toppedUp: shortfall,
+      throttled,
       message: `groq returned ${groqCount}/${requestCount} — topped up ${shortfall} with explorers`,
     };
   }
-  return { source: "mixed", groqCount, explorerCount, toppedUp: 0 };
+  // Fully Groq-driven cycle. Note the retry only if it happened — calm, not alarming.
+  return {
+    source: "mixed",
+    groqCount,
+    explorerCount,
+    toppedUp: 0,
+    throttled,
+    message: throttled ? "groq throttled — retried" : undefined,
+  };
 }

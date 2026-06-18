@@ -47,4 +47,6 @@ export interface ProposeResponse {
   candidates: string[];
   /** Present when the call degraded; the proposer tops up with explorers. */
   error?: string;
+  /** True when the call hit a 429 and had to back off + retry (but still succeeded or failed honestly). */
+  throttled?: boolean;
 }
