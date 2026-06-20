@@ -42,16 +42,21 @@ export function Readout() {
   // the structural genome (with C0, C1, …) doesn't plot on its own.
   const bestExpr = best?.score.fittedExpr ?? best?.candidate.genome ?? null;
 
-  // Running best-ever fitness per completed cycle — the climbing curve.
+  // Running best fitness per cycle, RESET at each target swap so the curve dips
+  // and re-climbs — earlier cycles were scored on different data.
+  const swaps = useSymbolicStore((s) => s.swaps);
+  const swapSet = new Set(swaps.map((s) => s.cycle));
   const data: number[] = [];
   if (run) {
     let running = -Infinity;
     for (const c of run.cycles) {
+      if (swapSet.has(c.index)) running = -Infinity; // new segment
       const v = c.bestSoFar?.score.value;
-      if (typeof v === "number" && v > running) running = v;
-      if (running > -Infinity) data.push(running);
+      if (typeof v === "number" && (running === -Infinity || v > running)) running = v;
+      data.push(running === -Infinity ? 0 : running);
     }
   }
+  const swapMarks = swaps.map((s) => s.cycle).filter((c) => c < (run?.cycles.length ?? 0));
 
   let totalEvals = 0;
   let validEvals = 0;
@@ -133,7 +138,7 @@ export function Readout() {
           Fitness · best per cycle
         </div>
         <div className="rounded-md border border-border bg-card p-2">
-          <FitnessCurve data={data} maxCycles={maxCycles} />
+          <FitnessCurve data={data} maxCycles={maxCycles} swaps={swapMarks} />
         </div>
       </section>
 

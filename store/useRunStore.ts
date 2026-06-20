@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Run, RunConfig } from "@/lib/types";
+import type { Evaluation, Run, RunConfig } from "@/lib/types";
 import {
   DEFAULT_EVALUATOR_ID,
   getEvaluator,
@@ -7,12 +7,8 @@ import {
 import type { Proposer } from "@/lib/proposer";
 import { StubProposer } from "@/lib/proposer";
 import { GroqProposer } from "@/lib/proposer-groq";
-import {
-  createRun,
-  hasCyclesRemaining,
-  runCycle,
-  runLoop,
-} from "@/lib/engine";
+import { createRun, hasCyclesRemaining, isBetter, runCycle } from "@/lib/engine";
+import { useSymbolicStore } from "@/store/useSymbolicStore";
 
 /**
  * Choose the proposer for a run. The construction site — not engine.ts — decides
@@ -39,6 +35,25 @@ const PACING_MS = 150;
  */
 let activeToken = 0;
 
+/** Whether a cycle is mid-flight right now (so a swap can skip the transitional one). */
+let cycleInFlight = false;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Best-ever evaluation honestly re-baselined to the CURRENT target: only cycles
+ * at or after `minCycle` (the last target swap) count, because earlier cycles
+ * were scored on different data. Never carries a stale best across a swap.
+ */
+function bestEverFrom(run: Run, minCycle: number): Evaluation | null {
+  let best: Evaluation | null = null;
+  for (const c of run.cycles) {
+    if (c.index < minCycle) continue;
+    if (c.bestSoFar && isBetter(c.bestSoFar, best)) best = c.bestSoFar;
+  }
+  return best;
+}
+
 interface RunState {
   run: Run | null;
   isRunning: boolean;
@@ -58,6 +73,8 @@ interface RunState {
   reset: () => void;
   /** Execute exactly one cycle, then stop (paused). */
   stepOnce: () => Promise<void>;
+  /** Swap the active target dataset mid-run; the loop keeps running on new data. */
+  swapDataset: (datasetId: string) => void;
 }
 
 function buildConfig(state: RunState): RunConfig {
@@ -71,31 +88,43 @@ function buildConfig(state: RunState): RunConfig {
 }
 
 export const useRunStore = create<RunState>((set, get) => {
-  /** Drive the loop from the current run, committing each cycle as it lands. */
+  /**
+   * Drive the loop manually, re-reading the latest run from the store before each
+   * cycle. This is what makes a live target swap work: swapDataset mutates the
+   * store (new dataset + re-baselined best), and the very next cycle picks it up —
+   * engine.runCycle's signature and logic stay untouched.
+   */
   async function drive(): Promise<void> {
-    const startRun = get().run;
-    if (!startRun) return;
-
+    if (!get().run) return;
     const myToken = ++activeToken;
-    const proposer = makeProposer(startRun.config.evaluatorId);
-    const evaluator = getEvaluator(startRun.config.evaluatorId);
+    set((s) => ({ isRunning: true, run: s.run ? { ...s.run, status: "running" } : null }));
 
-    set({ isRunning: true, run: { ...startRun, status: "running" } });
+    const config = get().run!.config;
+    const proposer = makeProposer(config.evaluatorId);
+    const evaluator = getEvaluator(config.evaluatorId);
 
-    const loop = runLoop(get().run as Run, proposer, evaluator, {
-      paused: () => activeToken !== myToken,
-      pacingMs: PACING_MS,
-    });
+    while (activeToken === myToken) {
+      const current = get().run;
+      if (!current || current.cycles.length >= current.config.maxCycles) break;
 
-    for await (const updated of loop) {
+      cycleInFlight = true;
+      let updated: Run;
+      try {
+        updated = await runCycle(current, proposer, evaluator);
+      } finally {
+        cycleInFlight = false;
+      }
       if (activeToken !== myToken) return; // cancelled by pause/reset/new start
-      set({ run: updated });
+
+      // Authoritative best-ever: only cycles on the CURRENT target (post last swap).
+      const minCycle = useSymbolicStore.getState().lastSwapCycle;
+      set({ run: { ...updated, bestEver: bestEverFrom(updated, minCycle) } });
+
+      await sleep(PACING_MS);
+      if (activeToken !== myToken) return;
     }
 
-    // Loop ended naturally (reached maxCycles). runCycle already marked it done.
-    if (activeToken === myToken) {
-      set({ isRunning: false });
-    }
+    if (activeToken === myToken) set({ isRunning: false });
   }
 
   return {
@@ -113,6 +142,7 @@ export const useRunStore = create<RunState>((set, get) => {
 
     start: () => {
       activeToken++; // invalidate anything in flight
+      useSymbolicStore.getState().clearSwaps(); // fresh run → no swap history
       const run = createRun(buildConfig(get()));
       set({ run });
       void drive();
@@ -135,6 +165,7 @@ export const useRunStore = create<RunState>((set, get) => {
 
     reset: () => {
       activeToken++;
+      useSymbolicStore.getState().clearSwaps();
       set({ run: null, isRunning: false });
     },
 
@@ -156,8 +187,32 @@ export const useRunStore = create<RunState>((set, get) => {
 
       if (activeToken !== myToken) return; // superseded mid-step
 
+      const minCycle = useSymbolicStore.getState().lastSwapCycle;
       const status = hasCyclesRemaining(updated) ? "paused" : "done";
-      set({ run: { ...updated, status }, isRunning: false });
+      set({ run: { ...updated, status, bestEver: bestEverFrom(updated, minCycle) }, isRunning: false });
+    },
+
+    swapDataset: (datasetId) => {
+      const symbolic = useSymbolicStore.getState();
+      const run = get().run;
+
+      // Not in a run yet → just select the dataset for the next run.
+      if (!run) {
+        symbolic.setDataset(datasetId);
+        return;
+      }
+      if (datasetId === symbolic.datasetId) return;
+
+      // A cycle in flight was proposed/scored on the OLD target — treat it as
+      // pre-swap so it can never pollute the new target's best or history.
+      const swapCycle = run.cycles.length + (cycleInFlight ? 1 : 0);
+
+      symbolic.setDataset(datasetId); // evaluator scores on new data; UI shows it
+      symbolic.recordSwap(swapCycle, datasetId);
+
+      // Re-baseline honestly: drop the stale best (measured on the old data).
+      // The next cycle on the new target re-establishes it from real scores.
+      set({ run: { ...run, bestEver: null } });
     },
   };
 });

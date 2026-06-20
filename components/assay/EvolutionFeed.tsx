@@ -4,9 +4,30 @@ import { useEffect, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useRunStore } from "@/store/useRunStore";
 import { useProposerStore } from "@/store/useProposerStore";
+import { useSymbolicStore } from "@/store/useSymbolicStore";
+import { getDataset } from "@/lib/datasets";
 import { formatCycleLabel, formatScore } from "@/lib/format";
 import type { Cycle } from "@/lib/types";
 import { CandidateRow } from "./CandidateRow";
+
+/** Inline marker showing where the live target was swapped. */
+function SwapMarker({ datasetId, cycle }: { datasetId: string; cycle: number }) {
+  let name = datasetId;
+  try {
+    name = getDataset(datasetId).name;
+  } catch {
+    /* unknown id — show the raw id */
+  }
+  return (
+    <div className="flex items-center gap-2 px-2.5 py-1.5">
+      <span className="h-px flex-1 bg-[#cfe3f6]" />
+      <span className="rounded-full border border-[#cfe3f6] bg-signal-tint px-2 py-0.5 font-mono text-[10px] font-medium text-[#2f6fb0]">
+        ⇄ target swapped → {name} @ cycle {cycle}
+      </span>
+      <span className="h-px flex-1 bg-[#cfe3f6]" />
+    </div>
+  );
+}
 
 function CycleBlock({ cycle }: { cycle: Cycle }) {
   const bestId = cycle.bestSoFar?.candidate.id ?? null;
@@ -63,12 +84,13 @@ function CycleBlock({ cycle }: { cycle: Cycle }) {
 
 export function EvolutionFeed() {
   const run = useRunStore((s) => s.run);
+  const swaps = useSymbolicStore((s) => s.swaps);
   const endRef = useRef<HTMLDivElement>(null);
   const cycleCount = run?.cycles.length ?? 0;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [cycleCount]);
+  }, [cycleCount, swaps.length]);
 
   if (!run || run.cycles.length === 0) {
     return (
@@ -81,14 +103,25 @@ export function EvolutionFeed() {
     );
   }
 
+  const swapByCycle = new Map(swaps.map((s) => [s.cycle, s.datasetId]));
+
   return (
     <ScrollArea className="h-full">
       <div className="divide-y divide-border/70">
         {run.cycles.map((cycle) => (
           <div key={cycle.index} className="py-1.5">
+            {swapByCycle.has(cycle.index) && (
+              <SwapMarker datasetId={swapByCycle.get(cycle.index)!} cycle={cycle.index} />
+            )}
             <CycleBlock cycle={cycle} />
           </div>
         ))}
+        {/* a pending swap recorded at a not-yet-run cycle index */}
+        {swaps
+          .filter((s) => s.cycle >= run.cycles.length)
+          .map((s) => (
+            <SwapMarker key={`pending-${s.cycle}`} datasetId={s.datasetId} cycle={s.cycle} />
+          ))}
         <div ref={endRef} />
       </div>
     </ScrollArea>

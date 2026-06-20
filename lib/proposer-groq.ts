@@ -62,8 +62,13 @@ interface ValidRecord extends HistoryEntry {
   candidateId: string;
 }
 
-/** Summarize the run's history: top-k scored genomes + a few notable invalids. */
-function summarize(run: Run): {
+/**
+ * Summarize the run's history: top-k scored genomes + a few notable invalids.
+ * Only cycles at or after `minCycle` (the last target swap) are considered —
+ * after a swap, older candidates were scored on different data, so refining
+ * toward them would chase the wrong law.
+ */
+function summarize(run: Run, minCycle: number): {
   top: ValidRecord[];
   invalid: HistoryInvalid[];
 } {
@@ -71,6 +76,7 @@ function summarize(run: Run): {
   const invalidByGenome = new Map<string, string>();
 
   for (const cycle of run.cycles) {
+    if (cycle.index < minCycle) continue;
     for (const ev of cycle.evaluated) {
       const { score, candidate } = ev;
       if (score.valid && score.value !== null) {
@@ -125,9 +131,11 @@ export class GroqProposer implements Proposer {
     const explorerBaseline = Math.min(2, Math.max(0, n - 1));
     const requestCount = Math.max(1, n - explorerBaseline);
 
-    const datasetId = useSymbolicStore.getState().datasetId;
+    const symbolic = useSymbolicStore.getState();
+    const datasetId = symbolic.datasetId;
     const dataset = getDataset(datasetId);
-    const { top, invalid } = summarize(run);
+    // After a mid-run target swap, only consider post-swap history (current data).
+    const { top, invalid } = summarize(run, symbolic.lastSwapCycle);
 
     // Space propose calls so consecutive cycles don't burst past Groq's TPM window.
     await pace();

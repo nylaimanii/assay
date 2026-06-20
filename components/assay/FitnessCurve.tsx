@@ -5,6 +5,8 @@ interface FitnessCurveProps {
   data: number[];
   /** Total cycles the run is configured for (sets the x extent). */
   maxCycles: number;
+  /** Cycle indices where the target was swapped (drawn as vertical markers). */
+  swaps?: number[];
 }
 
 const W = 320;
@@ -18,17 +20,18 @@ const PAD_B = 22;
  * Minimal fitness curve: thin baby-blue line over a light grid.
  * Pure/deterministic from props — no scoring logic lives here.
  */
-export function FitnessCurve({ data, maxCycles }: FitnessCurveProps) {
+export function FitnessCurve({ data, maxCycles, swaps = [] }: FitnessCurveProps) {
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
 
   const xCount = Math.max(maxCycles - 1, 1);
   const yMaxRaw = data.length ? Math.max(...data) : 1;
   const yMinRaw = data.length ? Math.min(...data) : 0;
-  // Pad the y-domain a touch so the line never hugs the frame.
+  // Pad the y-domain a touch so the line never hugs the frame (allow negatives so
+  // a post-swap dip below zero stays visible).
   const span = Math.max(yMaxRaw - yMinRaw, 1);
   const yMax = yMaxRaw + span * 0.12;
-  const yMin = Math.max(0, yMinRaw - span * 0.12);
+  const yMin = yMinRaw - span * 0.12;
 
   const xFor = (i: number) => PAD_L + (i / xCount) * plotW;
   const yFor = (v: number) =>
@@ -72,6 +75,21 @@ export function FitnessCurve({ data, maxCycles }: FitnessCurveProps) {
             {formatValue(g.value, 0)}
           </text>
         </g>
+      ))}
+
+      {/* target-swap markers — the curve dips and re-climbs here */}
+      {swaps.map((cycle, i) => (
+        <line
+          key={`swap-${i}`}
+          x1={xFor(cycle)}
+          x2={xFor(cycle)}
+          y1={PAD_T}
+          y2={PAD_T + plotH}
+          stroke="#4f95d6"
+          strokeWidth={1}
+          strokeDasharray="2 2"
+          opacity={0.7}
+        />
       ))}
 
       {/* x baseline */}

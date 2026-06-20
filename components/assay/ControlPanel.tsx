@@ -95,6 +95,7 @@ export function ControlPanel() {
   const resume = useRunStore((s) => s.resume);
   const reset = useRunStore((s) => s.reset);
   const stepOnce = useRunStore((s) => s.stepOnce);
+  const swapDataset = useRunStore((s) => s.swapDataset);
 
   const datasetId = useSymbolicStore((s) => s.datasetId);
   const runtimeStatus = useSymbolicStore((s) => s.status);
@@ -108,8 +109,13 @@ export function ControlPanel() {
 
   const status = run?.status ?? "idle";
   const isPaused = status === "paused";
+  const isLive = status === "running" || status === "paused"; // a swap is meaningful
   const hasRemaining = run ? run.cycles.length < run.config.maxCycles : true;
   const canStep = !isRunning && hasRemaining && !symbolicBlocked;
+
+  // Mid-run: selecting a different dataset swaps the live target; otherwise it
+  // just sets the dataset for the next run.
+  const pickDataset = (id: string) => (isLive ? swapDataset(id) : setDataset(id));
 
   // Begin loading the Python runtime as soon as the symbolic evaluator is chosen.
   useEffect(() => {
@@ -152,9 +158,14 @@ export function ControlPanel() {
         <>
           <Separator />
           <section className="space-y-2">
-            <h2 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              Dataset
-            </h2>
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Dataset
+              </h2>
+              {isLive && (
+                <span className="font-mono text-[10px] text-[#2f6fb0]">swap is live →</span>
+              )}
+            </div>
             <div className="space-y-1.5">
               {DATASETS.map((d) => (
                 <PickerButton
@@ -162,8 +173,8 @@ export function ControlPanel() {
                   title={d.name}
                   subtitle={d.hiddenLaw}
                   selected={d.id === datasetId}
-                  disabled={isRunning}
-                  onClick={() => setDataset(d.id)}
+                  disabled={symbolicBlocked}
+                  onClick={() => pickDataset(d.id)}
                 />
               ))}
             </div>
