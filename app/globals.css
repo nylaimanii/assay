@@ -139,6 +139,12 @@
   animation: assay-fade-in 0.28s ease-out both;
 }
 
+/* Landing: anchored sections (#loop, #proof) land BELOW the sticky nav so their
+   headings are never clipped behind it when jumped/scrolled to. */
+section[id] {
+  scroll-margin-top: 5rem;
+}
+
 /* Landing: the hero curve "fits" onto the data in a gentle, looping draw-on. */
 @keyframes assay-draw {
   0% {
