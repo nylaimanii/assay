@@ -138,3 +138,60 @@
 .animate-cycle-in {
   animation: assay-fade-in 0.28s ease-out both;
 }
+
+/* Landing: the hero curve "fits" onto the data in a gentle, looping draw-on. */
+@keyframes assay-draw {
+  0% {
+    stroke-dashoffset: 1000;
+    opacity: 0.35;
+  }
+  45% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  85% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+.assay-draw {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: assay-draw 5s ease-in-out infinite;
+}
+
+/* Landing: a baby-blue highlight travels the loop steps in sequence. */
+@keyframes assay-step {
+  0%,
+  25%,
+  100% {
+    border-color: #e2e8f0;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transform: translateY(0);
+  }
+  8%,
+  17% {
+    border-color: #bcdcf6;
+    box-shadow: 0 8px 20px rgba(79, 149, 214, 0.18);
+    transform: translateY(-2px);
+  }
+}
+
+.assay-step {
+  animation: assay-step 3.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assay-draw,
+  .assay-step {
+    animation: none;
+  }
+  .assay-draw {
+    stroke-dashoffset: 0;
+  }
+}
